@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<section class="card login"><h1>Acesse sua central</h1><p class="muted">Infraestrutura conectada. Operação acompanhada.</p><form method="post">{% csrf_token %}{{ form.as_p }}<button type="submit">Entrar</button></form></section>{% endblock %}
