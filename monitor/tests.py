@@ -307,3 +307,27 @@ class MonitoringTests(TestCase):
         from .models import WhatsAppSettings
         from django.db import IntegrityError,transaction
         with self.assertRaises(IntegrityError),transaction.atomic():WhatsAppSettings.objects.create(pk=2)
+
+    def test_setup_scopes_progress_by_unit(self):
+        from django.contrib.auth.models import User
+        user=User.objects.create_user(username="new-setup-user",password="test")
+        self.client.force_login(user)
+        response=self.client.get("/setup/")
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.context["completed"],0)
+        self.collector.site.members.add(user)
+        response=self.client.get("/setup/")
+        self.assertEqual(response.context["completed"],3)
+        self.assertNotContains(response,"Configurar WhatsApp")
+    def test_setup_admin_empty_redirect_and_recent_data(self):
+        from django.contrib.auth.models import User
+        root=User.objects.create_superuser(username="setup-guide-admin",password="test")
+        self.client.force_login(root)
+        self.collector.last_seen=timezone.now();self.collector.save()
+        self.device.last_seen=timezone.now();self.device.save()
+        response=self.client.get("/setup/")
+        self.assertEqual(response.context["completed"],5)
+        self.assertContains(response,"NEXO_TOKEN")
+        self.assertContains(response,"a leitura deve ser conferida")
+    def test_setup_requires_login(self):
+        self.assertEqual(self.client.get("/setup/").status_code,302)

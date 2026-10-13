@@ -16,6 +16,9 @@ def visible_devices(user):
     return qs if user.is_superuser else qs.filter(collector__site__members=user)
 @login_required
 def dashboard(request):
+    if request.user.is_superuser and not Site.objects.exists():
+        from django.shortcuts import redirect
+        return redirect("/setup/")
     qs=visible_devices(request.user)
     if request.GET.get("q"): qs=qs.filter(Q(name__icontains=request.GET["q"])|Q(host__icontains=request.GET["q"]))
     if request.GET.get("site", "").isdigit(): qs=qs.filter(collector__site_id=request.GET["site"])
@@ -281,3 +284,27 @@ def notifications(request):
     from .models import AlertRecipient
     sites=Site.objects.all() if request.user.is_superuser else Site.objects.filter(members=request.user)
     return render(request,"notifications.html",{"events":Notification.objects.filter(site__in=sites).order_by("-id")[:200],"recipients":AlertRecipient.objects.filter(site__in=sites)})
+
+@login_required
+def setup(request):
+    from django.conf import settings
+    from .models import AlertRecipient,MFAProfile,WhatsAppSettings
+    sites=Site.objects.all() if request.user.is_superuser else Site.objects.filter(members=request.user)
+    collectors=Collector.objects.filter(site__in=sites,enabled=True)
+    devices=visible_devices(request.user).filter(enabled=True)
+    recent=timezone.now()-timedelta(minutes=3)
+    wa=WhatsAppSettings.objects.filter(pk=1,enabled=True).first() if request.user.is_superuser else None
+    steps=[
+        {"title":"Cadastre a primeira unidade","description":"Unidade é o local onde ficam os equipamentos. Exemplo: Matriz ou Filial 01.","done":sites.exists(),"url":"/infrastructure/site/new/" if request.user.is_superuser else "/units/","button":"Cadastrar unidade"},
+        {"title":"Cadastre um coletor","description":"Coletor é o programa instalado em uma máquina da unidade. Ele verifica os equipamentos e envia os resultados à central. Criar o cadastro ainda não instala o programa.","done":collectors.exists(),"url":"/infrastructure/collector/new/" if request.user.is_superuser else "/units/","button":"Cadastrar coletor"},
+        {"title":"Instale e confirme o coletor","description":"Copie o token exibido no cadastro para NEXO_TOKEN. Configure NEXO_URL com a URL HTTPS da central. Execute o programa na rede local; a etapa conclui quando chega um contato recente.","done":collectors.filter(last_seen__gte=recent).exists(),"url":"/units/","button":"Ver contato dos coletores"},
+        {"title":"Cadastre um equipamento para testar","description":"Informe nome, categoria, IP e coletor. Comece com ping se o equipamento responder a ICMP; TCP exige uma porta realmente aberta. Dados de exemplo não são equipamentos reais.","done":devices.exists(),"url":"/devices/new/","button":"Cadastrar equipamento"},
+        {"title":"Receba a primeira verificação","description":"Uma amostra recente confirma a comunicação. Disponível significa que o teste escolhido passou; isso não comprova todas as funções do equipamento.","done":devices.filter(last_seen__gte=recent).exists(),"url":"/","button":"Abrir painel"},
+    ]
+    if request.user.is_superuser:
+        steps.extend([
+            {"title":"Configure os alertas","description":"No WhatsApp, cadastre um único destinatário, leia o QR e envie o teste. Para e-mail, configure SMTP no Coolify e cadastre o destinatário por unidade. Esta etapa confirma o cadastro, não a entrega.","done":bool(wa) or (bool(settings.EMAIL_HOST) and AlertRecipient.objects.filter(site__in=sites,enabled=True).exists()),"url":"/whatsapp/","button":"Configurar WhatsApp"},
+            {"title":"Confirme uma entrega real","description":"Confira no telefone o teste enviado e depois uma falha controlada de um equipamento de teste. O status de envio registra aceitação pelo gateway/SMTP; a leitura deve ser conferida pelo destinatário.","done":Notification.objects.filter(site__in=sites).filter(Q(sent_at__isnull=False)|Q(whatsapp_sent_at__isnull=False)).exists(),"url":"/notifications/","button":"Ver entregas registradas"},
+            {"title":"Ative a proteção da conta (opcional)","description":"Use um autenticador para exigir código além da senha. Guarde acesso seguro ao servidor para recuperação administrativa.","done":MFAProfile.objects.filter(user=request.user).exists(),"url":"/security/","button":"Configurar duas etapas"},
+        ])
+    return render(request,"setup.html",{"steps":steps,"completed":sum(bool(step["done"]) for step in steps),"total":len(steps)})

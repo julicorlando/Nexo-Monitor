@@ -26,6 +26,11 @@ class DeviceForm(forms.ModelForm):
     def __init__(self,*args,user,**kwargs):
         from .models import Collector
         super().__init__(*args,**kwargs)
+        labels={"name":"Nome do equipamento","category":"Categoria","model":"Modelo","collector":"Coletor responsável","host":"IP ou nome na rede","port":"Porta do serviço","check_type":"Tipo de verificação","http_path":"Caminho HTTPS","expected_status":"Código HTTP esperado","credential_key":"Nome da credencial no coletor","snmp_oid":"OID SNMP","integration_path":"Caminho da API da integração","service_name":"Nome do serviço ou processo local","serial_number":"Número de série","location":"Localização dentro da unidade","parent":"Equipamento do qual depende","failure_threshold":"Falhas consecutivas antes de alertar","cpu_limit":"Limite de CPU (%)","memory_limit":"Limite de memória (%)","disk_limit":"Limite de disco (%)","maintenance_until":"Silenciar alertas até","enabled":"Ativar monitoramento","notes":"Observações"}
+        hints={"host":"Ex.: 10.0.0.20. Use o endereço alcançável pelo coletor, não pelo navegador.","port":"TCP/HTTPS usam esta porta. Ping não usa porta. Ex.: 443 para HTTPS, se habilitado no equipamento.","collector":"Escolha o coletor instalado na mesma rede do equipamento.","credential_key":"Somente o nome da configuração. Senhas ficam nas variáveis locais do coletor.","parent":"Ex.: switch ou roteador. Alertas do dependente são suprimidos quando o pai não está disponível.","failure_threshold":"1 alerta na primeira falha; 3 aguarda três falhas consecutivas.","check_type":"Comece com ping ou TCP. Integrações exigem API/SNMP habilitados e credenciais de leitura.","maintenance_until":"A coleta continua, mas alertas são silenciados até esta data.","service_name":"Exige coletor instalado na própria máquina. Não consulta serviços de outro computador."}
+        self.fields["check_type"].choices=[("tcp","Conexão a uma porta (TCP)"),("ping","Resposta na rede (ping)"),("http","Página ou API HTTPS"),("system","CPU, memória e disco da máquina do coletor"),("service","Serviço/processo na máquina do coletor"),("snmp","Consulta de um OID SNMP"),("snmpwalk","Consulta de uma subárvore SNMP"),("mikrotik","MikroTik — API de leitura"),("unifi","UniFi — lista de dispositivos"),("hikvision","Hikvision — estado dos discos compatíveis")]
+        for key,label in labels.items():self.fields[key].label=label
+        for key,hint in hints.items():self.fields[key].help_text=hint
         self.fields["collector"].queryset=Collector.objects.all() if user.is_superuser else Collector.objects.filter(site__members=user)
         self.fields["parent"].queryset=Device.objects.all() if user.is_superuser else Device.objects.filter(collector__site__members=user)
     def clean(self):
@@ -55,13 +60,19 @@ class SiteForm(forms.ModelForm):
         from .models import Site
         model=Site
         fields=["name","address","latitude","longitude","members"]
+        labels={"name":"Nome da unidade","address":"Endereço","latitude":"Latitude (opcional)","longitude":"Longitude (opcional)","members":"Usuários autorizados a visualizar esta unidade"}
+        help_texts={"name":"Ex.: Matriz ou Filial 01.","members":"Administradores gerais já têm acesso. Selecione usuários comuns apenas quando necessário."}
 class CollectorForm(forms.ModelForm):
     class Meta:
         from .models import Collector
         model=Collector
         fields=["name","site","enabled","offline_after"]
+        labels={"name":"Nome do coletor","site":"Unidade","enabled":"Ativar coletor","offline_after":"Tempo sem contato para alertar (segundos)"}
+        help_texts={"name":"Ex.: Coletor da Matriz. O cadastro não instala o programa.","offline_after":"180 segundos = 3 minutos. Depois de salvo, copie o token e configure o programa na máquina local."}
 class EmailRecipientForm(forms.ModelForm):
     class Meta:
         from .models import AlertRecipient
         model=AlertRecipient
         fields=["site","email","enabled"]
+        labels={"site":"Unidade","email":"E-mail de destino","enabled":"Ativar destinatário"}
+        help_texts={"email":"O envio depende das variáveis SMTP configuradas no Coolify."}
