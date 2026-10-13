@@ -1,0 +1,7 @@
+services:
+  collector:
+    build: .
+    restart: unless-stopped
+    environment:
+      NEXO_URL: ${NEXO_URL:?Configure URL HTTPS}
+      NEXO_TOKEN: ${NEXO_TOKEN:?Configure token}

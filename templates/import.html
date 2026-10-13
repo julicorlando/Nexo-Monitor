@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<h1>Importar inventário — {{ collector }}</h1><p>Colunas: name,category,host,port,model,serial_number,location,check_type</p>{% if count != None %}<p>{{ count }} equipamentos importados.</p>{% endif %}<form method="post" enctype="multipart/form-data">{% csrf_token %}{{ form.as_p }}<button>Importar</button></form>{% endblock %}
