@@ -1,33 +1,28 @@
 # Nexo Monitor
 
-Central web em português para inventário e monitoramento de infraestrutura em múltiplas unidades. Primeira versão funcional em Django, PostgreSQL e HTML/CSS responsivo. O coletor Python utiliza apenas a biblioteca padrão.
+Central web em português para monitoramento e inventário de infraestrutura, com Django/PostgreSQL e coletores Python distribuídos. Instalação preparada para PowerEdge R230 + Coolify; nenhum acesso ou deploy foi realizado na rede real.
 
-## Disponível nesta versão
-- Login, sessões e administração de usuários pelo Django.
-- Unidades, coletores e equipamentos; categorias para o inventário informado.
-- Verificação de portas TCP com coletor local ou em outras unidades, conexões de saída HTTPS.
-- Painel com status e latência; dados com mais de 180 segundos ficam sem confirmação recente.
-- Histórico de verificações e incidentes com resolução automática.
-- Token exclusivo por coletor, armazenado somente como SHA-256; isolamento dos resultados por coletor.
-- Docker Compose com PostgreSQL persistente, healthchecks, migrations no deploy e processo web sem root.
+## Implementado
+- Painel responsivo, inventário com formulários, unidades, importação CSV e permissões por unidade.
+- TCP, HTTPS, ping, recursos locais CPU/RAM/disco, serviço Windows/processo Linux, SNMP consulta/subárvore.
+- Adaptadores de leitura MikroTik REST, UniFi via API key/caminho configurável e status de discos Hikvision ISAPI.
+- Gráficos de latência, histórico por horário observado e disponibilidade por amostras recebidas.
+- Incidentes, confirmação por falhas consecutivas, dependências e manutenção programada.
+- Alertas de falha/recuperação e perda/retorno do coletor, via SMTP.
+- Fila SQLite persistente no coletor, cache de configuração, reenvio idempotente e preservação do estado mais recente.
+- MFA TOTP opcional com proteção de replay, segredo criptografado, limitação de tentativas de login e auditoria.
+- Docker Compose, worker, migrações automáticas, healthcheck web/banco, retenção de amostras e instruções de backup.
+- Script de monitor externo para a própria central.
 
-## Implantar no Coolify / PowerEdge R230
-1. Crie um recurso Docker Compose apontando para este repositório e `compose.yaml`.
-2. Gere valores distintos e fortes para SECRET_KEY e POSTGRES_PASSWORD. Exemplo local: `python -c 'import secrets; print(secrets.token_urlsafe(48))'`.
-3. Configure ALLOWED_HOSTS com o domínio **sem protocolo**, incluindo `localhost,127.0.0.1` para o healthcheck; configure CSRF_TRUSTED_ORIGINS com `https://seu-dominio`.
-4. Associe o domínio ao serviço web na porta 8000, habilite HTTPS e faça deploy. PostgreSQL não precisa de porta pública.
-5. No terminal do serviço web, execute `python manage.py createsuperuser`. Acesse `/admin/`.
-6. Cadastre a unidade, o coletor e os equipamentos com IP/hostname e uma porta realmente aberta (ex.: interface HTTPS 443 ou RTSP 554). Equipamentos sem serviço TCP acessível não podem ser avaliados corretamente nesta versão.
-7. Gere o token: `python manage.py issue_collector_token ID`. Copie-o para o coletor; repetir o comando revoga o token anterior.
-8. Em uma máquina da rede monitorada com Python 3.12, configure NEXO_URL e NEXO_TOKEN como variáveis de ambiente e execute `python collector/agent.py`. Configure o processo como serviço com reinício automático. Em outras unidades, repita com outro coletor/token.
-9. Agende `python manage.py prune_results` diariamente para retenção de 30 dias. Configure backups externos do PostgreSQL e teste restauração.
+## Instalação
+Leia [Operação](docs/OPERACAO.md) e [Integrações](docs/INTEGRACOES.md). Use compose.yaml no Coolify; copie os nomes das variáveis de .env.example. Gere SECRET_KEY e POSTGRES_PASSWORD distintos, configure ALLOWED_HOSTS (domínio sem protocolo + localhost,127.0.0.1), CSRF_TRUSTED_ORIGINS (domínio HTTPS) e SMTP. Após deploy: `python manage.py createsuperuser` no terminal web. Cadastre unidades/coletores e gere um token com `python manage.py issue_collector_token ID`. Cada unidade precisa de coletor com acesso à rede local.
 
-O inventário não vem preenchido com IPs inventados. Coletores aceitam até 500 resultados por lote. Cada ciclo ocorre a cada 60 segundos, após a conclusão do anterior. Falhas de comunicação com a central ficam nos logs; a próxima coleta recupera o estado atual, sem fila persistente de resultados.
+Nunca versione senhas, tokens ou dumps. Preserve SECRET_KEY: a troca exige reconfigurar MFA. O monitor externo deve ficar em outra rede/máquina. Banco não tem porta pública. Configuração de rede/API dos equipamentos não é alterada pelo sistema.
 
-## Desenvolvimento e testes
+## Desenvolvimento
 ```bash
-pip install -r requirements.txt
-export SECRET_KEY=chave-local-de-desenvolvimento
+pip install -r requirements.txt -r collector/requirements.txt
+export SECRET_KEY=chave-apenas-para-desenvolvimento
 export DEBUG=true
 python manage.py migrate
 python manage.py createsuperuser
@@ -35,22 +30,7 @@ python manage.py runserver
 python manage.py test
 ```
 
-## Próximas integrações
-SNMP, MikroTik, UniFi, agentes de CPU/RAM/disco, estado de gravação Intelbras/Hikvision, notificações por e-mail, gráficos, permissões por unidade e MFA. React e Redis poderão entrar quando houver necessidade de interface e processamento mais complexos. Não estão implementados nesta versão.
+## Limites e validação pendente
+Não presume IPs, usuários, versões ou respostas dos equipamentos reais. Os conectores foram testados com respostas simuladas. Intelbras proprietário, gravação recente, MIBs específicas PoE/toner/REP e clientes/estatísticas Wi-Fi UniFi dependem de modelos/documentação e homologação. SNMP atual usa v2c e não calcula taxas de tráfego. UniFi usa uma página de API compatível, sem API legada. O gráfico de disponibilidade é baseado em amostras; períodos sem coleta não são uptime confirmado. Recursos locais medem o host do coletor ou container onde estiver instalado.
 
-TCP disponível não equivale a aplicação saudável. A central no R230 ficará indisponível se ele ou o link da matriz cair; para detectar essa condição é necessário um monitor externo independente. Não exponha interfaces administrativas dos equipamentos na internet. Use HTTPS na central e acesso administrativo restrito.
-
-## Atualização: verificações, alertas e inventário
-
-- Tipos de verificação: `tcp`, `http` (HTTPS, código esperado e caminho), `ping`, `system` e `snmp`.
-- CPU/memória/disco com limites configuráveis: `system` mede **a máquina onde o coletor está instalado**. Instale um coletor em cada servidor que deseja medir; em Docker, os valores pertencem ao ambiente do container e não garantem a visão completa do host. Para métricas do R230 use processo nativo.
-- `pip install -r collector/requirements.txt` habilita psutil. Ping exige o executável do sistema; SNMP exige `snmpget` (net-snmp).
-- SNMP v2c: configure `credential_key` (ex.: `SWITCH`) e variável local `NEXO_SNMP_SWITCH` com a comunidade somente leitura. A credencial fica no coletor. Net-snmp recebe a comunidade por argumento; usuários locais privilegiados podem vê-la. Use somente rede confiável/VPN. SNMPv3 e coleta de múltiplos OIDs ainda não implementados. O teste verifica resposta do OID, não interpreta estado PoE/portas.
-- Falhas consecutivas: `failure_threshold` evita abrir incidente no primeiro erro. Durante a confirmação o status fica sem confirmação.
-- Destinatários cadastrados em AlertRecipient por unidade. Configure SMTP nas variáveis do Coolify. O serviço `worker` envia alertas e recuperações automaticamente e remove amostras com mais de 30 dias. Mantenha uma única réplica do worker. Até cinco tentativas; falhas ficam registradas em Notification. Não há envio de teste automático a terceiros.
-- Histórico nas últimas 24h: porcentagem das **amostras recebidas**, latência e recursos. Ausência de coleta não é contabilizada como uptime. Gráfico simples de latência em barras por amostra.
-- Usuários comuns visualizam apenas unidades onde estão em `Site.members`. A administração global é exclusiva de superusuários. Para importar CSV, conceda a permissão `monitor.add_device` e associe o usuário à unidade.
-- Importação: `/collectors/ID/import/`, até 1 MB/1.000 linhas, validada antes de gravar. Colunas `name,category,host,port,model,serial_number,location,check_type`. Cria registros novos; não deduplica. Exemplo: `Servidor 01,Servidor,192.168.1.20,443,Dell,ABC123,CPD,tcp`.
-- Coletores enviam heartbeat também quando não há equipamentos. Ainda não existe alerta específico de perda do coletor; o painel marca os equipamentos sem dados recentes.
-
-Integrações dedicadas às APIs MikroTik, UniFi, Intelbras/Hikvision, MFA, React, fila persistente offline e notificações de perda de coletor seguem como evolução futura. A opção SNMP já permite testar um OID de equipamentos compatíveis, sem fingir indicadores específicos não implementados.
+O inventário usa HTML/CSS com Django; React/Redis não são necessários nesta etapa. O SMTP realiza entrega com possibilidade de repetição após falha entre envio e confirmação. Uma única réplica do worker. Cadastros iniciais de unidades, coletores, usuários e destinatários ficam na administração de superusuário. Auditoria cobre login, MFA, alterações no inventário/importação e administração de modelos monitorados; não registra mudanças feitas diretamente no banco. Retenção de amostras: 30 dias; fila offline: seis dias/10.000 lotes. Backups, SMTP, APIs e instalação Coolify precisam ser testados no ambiente real antes de declarar a operação homologada.

@@ -5,3 +5,8 @@ services:
     environment:
       NEXO_URL: ${NEXO_URL:?Configure URL HTTPS}
       NEXO_TOKEN: ${NEXO_TOKEN:?Configure token}
+      NEXO_SPOOL_PATH: /data/spool.sqlite3
+    volumes:
+      - collector_data:/data
+volumes:
+  collector_data:

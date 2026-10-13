@@ -12,7 +12,23 @@ def check(device):
     metrics={}
     try:
         kind=device.get("check_type","tcp")
-        if kind=="tcp":
+        if kind in ("mikrotik","unifi","hikvision"):
+            from integrations import read
+            metrics,healthy=read(device)
+            if not healthy:raise ValueError("Integration health check failed")
+        elif kind=="service":
+            import psutil
+            name=device.get("service_name","")
+            if not name:raise ValueError("Configure service/process name")
+            if platform.system()=="Windows":
+                if psutil.win_service_get(name).status()!="running":raise ValueError("Service stopped")
+            else:
+                names=[]
+                for process in psutil.process_iter(["name"]):
+                    try:names.append(process.info["name"])
+                    except (psutil.NoSuchProcess,psutil.AccessDenied):continue
+                if name not in names:raise ValueError("Process stopped")
+        elif kind=="tcp":
             with socket.create_connection((device["host"],device["port"]),timeout=3): pass
         elif kind=="http":
             # HTTPS only, no redirects or credentials received from central.
@@ -36,29 +52,43 @@ def check(device):
             import psutil
             metrics={"cpu":psutil.cpu_percent(interval=1),"memory":psutil.virtual_memory().percent,"disk":psutil.disk_usage(os.getenv("NEXO_DISK_PATH","/")).percent}
             if any(value>=device.get(key+"_limit",90) for key,value in metrics.items()): raise ValueError("Resource threshold exceeded")
-        elif kind=="snmp":
+        elif kind in ("snmp","snmpwalk"):
             # net-snmp executable; community stored on collector, not in web database.
             host=device["host"];oid=device.get("snmp_oid","")
             if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.:%_-]*",host) or not re.fullmatch(r"[0-9.]+",oid): raise ValueError("Invalid SNMP target")
             key=device.get("credential_key","")
             if not re.fullmatch(r"[A-Za-z0-9_-]+",key): raise ValueError("Missing SNMP credential key")
             community=os.environ["NEXO_SNMP_"+key.upper().replace("-","_")]
-            result=subprocess.run(["snmpget","-v2c","-c",community,"-t","2","-r","0","-Oqv",host,oid],capture_output=True,text=True,timeout=5,check=True)
-            metrics={"snmp_value":result.stdout.strip()[:500]}
+            result=subprocess.run(["snmpwalk" if kind=="snmpwalk" else "snmpget","-v2c","-c",community,"-t","2","-r","0","-Oqv",host,oid],capture_output=True,text=True,timeout=5,check=True)
+            metrics={"integration":{"oid":oid,"values":result.stdout.strip().splitlines()[:50]}} if kind=="snmpwalk" else {"snmp_value":result.stdout.strip()[:500]}
         else: raise ValueError("Unsupported check")
         return {"id":device["id"],"success":True,"latency_ms":round((time.monotonic()-start)*1000,2),"metrics":metrics}
     except Exception:
         return {"id":device["id"],"success":False,"latency_ms":None,"metrics":metrics}
 def main():
+    from spool import Spool
     logging.basicConfig(level=logging.INFO)
+    spool=Spool(os.getenv("NEXO_SPOOL_PATH","nexo-spool.sqlite3"))
     while True:
         try:
             devices=api("/api/collector/config/")["devices"]
-            if not devices: api("/api/collector/results/",{"results":[]})
-            with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor: results=list(executor.map(check,devices))
-            for offset in range(0,len(results),500): api("/api/collector/results/",{"results":results[offset:offset+500]})
-            logging.info("Verificados %d dispositivos",len(results))
-        except Exception as exc: logging.warning("Falha na coleta: %s",type(exc).__name__)
+            spool.cache(devices)
+        except Exception as exc:
+            logging.warning("Configuração indisponível, usando cache: %s",type(exc).__name__)
+            devices=spool.devices()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor: results=list(executor.map(check,devices))
+        for offset in range(0,max(1,len(results)),100):
+            evicted=spool.enqueue(results[offset:offset+100])
+            if evicted: logging.warning("Fila cheia: %d lotes antigos removidos",evicted)
+        try:
+            spool.flush(lambda data:api("/api/collector/results/",data))
+        except urllib.error.HTTPError as exc:
+            # Permanently invalid batches (deleted/disabled devices, expired timestamps) do not block FIFO.
+            if exc.code in (400,413):
+                spool.db.execute("DELETE FROM batches WHERE id IN (SELECT id FROM batches ORDER BY created LIMIT 1)");spool.db.commit()
+                logging.warning("Lote rejeitado descartado: HTTP %s",exc.code)
+            else: logging.warning("Central indisponível: HTTP %s",exc.code)
+        except Exception as exc: logging.warning("Resultados preservados na fila: %s",type(exc).__name__)
         time.sleep(60)
 
 if __name__=="__main__":

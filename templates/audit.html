@@ -1,0 +1,1 @@
+{% extends "base.html" %}{% block content %}<h1>Auditoria</h1><div class="table"><table><tr><th>Data</th><th>Usuário</th><th>Ação</th><th>Objeto</th></tr>{% for e in events %}<tr><td>{{ e.created_at }}</td><td>{{ e.actor|default_if_none:"Sistema" }}</td><td>{{ e.action }}</td><td>{{ e.object_label }}</td></tr>{% endfor %}</table></div>{% endblock %}

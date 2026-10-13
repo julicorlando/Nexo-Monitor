@@ -7,6 +7,8 @@ logging.basicConfig(level=logging.INFO)
 last_cleanup=0
 while True:
     try:
+        from monitor.services import inspect_collectors
+        inspect_collectors()
         call_command("send_notifications")
         if time.monotonic()-last_cleanup>86400:
             call_command("prune_results")
