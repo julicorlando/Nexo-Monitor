@@ -5,7 +5,7 @@ Este documento separa funções não implementadas de configuração e homologa�
 ## Funções ainda não implementadas
 - Descoberta de equipamentos por faixa de IP com aprovação antes de cadastrar.
 - Topologia visual/mapa de unidades: dependências já existem, mas não há mapa renderizado.
-- Incidentes com reconhecimento, responsável, prioridade e histórico de observações.
+- Prioridade de incidentes, escalonamento e relatórios de atendimento. Reconhecimento, responsável e observações já foram implementados.
 - Relatórios mensais/exportação, SLA por tempo, duração de quedas e tempo de recuperação. A disponibilidade atual é por amostras recebidas; ausência de dados não conta como uptime.
 - Tráfego por segundo, erros de portas e tradução de MIBs específicas de PoE, toner e REP. SNMP atual consulta OID/subárvore; MikroTik mostra contadores cumulativos.
 - Clientes, estatísticas e qualidade Wi-Fi UniFi. O conector atual lista dispositivos com paginação limitada.
@@ -34,3 +34,6 @@ Este documento separa funções não implementadas de configuração e homologa�
 
 ## Já implementado
 Inventário e cadastros no painel, usuários por unidade, tipos de verificação, histórico, incidentes automáticos, manutenção, dependências, fila offline idempotente, alertas de equipamento/coletor, SMTP, WhatsApp/QR com único destino, auditoria, MFA TOTP, Docker Compose e guia de primeira configuração. Detalhes e limites nos guias de operação/integração/WhatsApp.
+
+## Evolução de operação implementada
+Diagnóstico dos coletores, healthcheck independente do worker, alertas de verificação atrasada, confirmação de recuperação, prévia de regras, arquivamento/restauração, papéis e histórico de campos alterados foram implementados. O alerta do worker parado exige monitor externo. Ainda faltam instalação automática desse monitor externo, configuração de limites da fila pelo painel e alerta autônomo originado no coletor durante perda total de conexão.

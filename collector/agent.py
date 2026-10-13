@@ -81,11 +81,13 @@ def main():
     from spool import Spool
     logging.basicConfig(level=logging.INFO)
     spool=Spool(os.getenv("NEXO_SPOOL_PATH","nexo-spool.sqlite3"))
+    last_sync="";last_error=""
     while True:
         try:
             devices=api("/api/collector/config/")["devices"]
             spool.cache(devices)
         except Exception as exc:
+            last_error=type(exc).__name__
             logging.warning("Configuração indisponível, usando cache: %s",type(exc).__name__)
             devices=spool.devices()
         with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor: results=list(executor.map(check,devices))
@@ -93,14 +95,25 @@ def main():
             evicted=spool.enqueue(results[offset:offset+100])
             if evicted: logging.warning("Fila cheia: %d lotes antigos removidos",evicted)
         try:
-            spool.flush(lambda data:api("/api/collector/results/",data))
+            def send(data):
+                nonlocal last_sync,last_error
+                from datetime import datetime,timezone
+                from pathlib import Path
+                payload=dict(data)
+                payload["diagnostics"]={"version":"0.4.0","last_sync":last_sync,"last_error":last_error,"queue_batches":spool.db.execute("SELECT COUNT(*) FROM batches").fetchone()[0],"queue_bytes":Path(os.getenv("NEXO_SPOOL_PATH","nexo-spool.sqlite3")).stat().st_size,"configured_devices":len(devices)}
+                api("/api/collector/results/",payload)
+                last_sync=datetime.now(timezone.utc).isoformat();last_error=""
+            spool.flush(send)
         except urllib.error.HTTPError as exc:
+            last_error="HTTP_"+str(exc.code)
             # Permanently invalid batches (deleted/disabled devices, expired timestamps) do not block FIFO.
             if exc.code in (400,413):
                 spool.db.execute("DELETE FROM batches WHERE id IN (SELECT id FROM batches ORDER BY created LIMIT 1)");spool.db.commit()
                 logging.warning("Lote rejeitado descartado: HTTP %s",exc.code)
             else: logging.warning("Central indisponível: HTTP %s",exc.code)
-        except Exception as exc: logging.warning("Resultados preservados na fila: %s",type(exc).__name__)
+        except Exception as exc:
+            last_error=type(exc).__name__
+            logging.warning("Resultados preservados na fila: %s",type(exc).__name__)
         time.sleep(60)
 
 if __name__=="__main__":

@@ -17,6 +17,8 @@ class Collector(models.Model):
     site = models.ForeignKey(Site, on_delete=models.PROTECT)
     token_hash = models.CharField(max_length=64, unique=True, editable=False, default=lambda_token_hash)
     enabled = models.BooleanField(default=True)
+    diagnostics_alerted = models.BooleanField(default=False)
+    diagnostics = models.JSONField(default=dict,blank=True)
     offline = models.BooleanField(default=False)
     offline_after = models.PositiveIntegerField(default=180, validators=[MinValueValidator(60),MaxValueValidator(3600)])
     last_seen = models.DateTimeField(null=True, blank=True)
@@ -49,6 +51,11 @@ class Device(models.Model):
     memory_limit = models.PositiveIntegerField(default=90, validators=[MaxValueValidator(100)])
     disk_limit = models.PositiveIntegerField(default=90, validators=[MaxValueValidator(100)])
     failure_threshold = models.PositiveIntegerField(default=1, validators=[MinValueValidator(1),MaxValueValidator(20)])
+    created_at = models.DateTimeField(default=timezone.now)
+    archived_at = models.DateTimeField(null=True,blank=True)
+    stale_alerted = models.BooleanField(default=False)
+    recovery_threshold = models.PositiveIntegerField(default=1,validators=[MinValueValidator(1),MaxValueValidator(20)])
+    consecutive_successes = models.PositiveIntegerField(default=0)
     consecutive_failures = models.PositiveIntegerField(default=0)
     metrics = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=True)
@@ -78,6 +85,8 @@ class CheckResult(models.Model):
     latency_ms = models.FloatField(null=True)
 class Incident(models.Model):
     device = models.ForeignKey(Device, on_delete=models.CASCADE)
+    acknowledged_at = models.DateTimeField(null=True,blank=True)
+    assigned_to = models.ForeignKey(User,null=True,blank=True,on_delete=models.SET_NULL)
     opened_at = models.DateTimeField(auto_now_add=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
     class Meta:
@@ -115,6 +124,7 @@ class AuditEvent(models.Model):
     actor = models.ForeignKey(User,null=True,on_delete=models.SET_NULL)
     site = models.ForeignKey(Site,null=True,on_delete=models.SET_NULL)
     action = models.CharField(max_length=50)
+    changes = models.JSONField(default=dict,blank=True)
     object_label = models.CharField(max_length=200)
     created_at = models.DateTimeField(auto_now_add=True)
 class MFAProfile(models.Model):
@@ -143,3 +153,15 @@ class WhatsAppSettings(models.Model):
         if self.enabled and not self.recipient:raise ValidationError("Cadastre o destinatário antes de ativar.")
     class Meta:
         constraints=[models.CheckConstraint(condition=models.Q(id=1),name="singleton_whatsapp")]
+
+class WorkerState(models.Model):
+    name=models.CharField(max_length=30,primary_key=True,default="main")
+    last_seen=models.DateTimeField(default=timezone.now)
+    last_error=models.CharField(max_length=120,blank=True)
+class IncidentNote(models.Model):
+    incident=models.ForeignKey(Incident,on_delete=models.CASCADE)
+    actor=models.ForeignKey(User,null=True,on_delete=models.SET_NULL)
+    body=models.TextField(max_length=2000)
+    created_at=models.DateTimeField(auto_now_add=True)
+    class Meta:
+        permissions=[("manage_incidents","Reconhecer e acompanhar incidentes")]

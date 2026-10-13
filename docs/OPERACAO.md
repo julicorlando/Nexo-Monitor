@@ -28,3 +28,14 @@ Rode collector/external_probe.py em outra máquina/rede, apontando NEXO_EXTERNAL
 - Testar manutenção, destinatários e e-mail de recuperação.
 - Confirmar leitura de métricas e serviços em cada SO.
 - Validar APIs e versões dos fabricantes e restaurar um backup isolado.
+
+## Saúde da coleta e perfis
+A tela Saúde da coleta mostra último contato do worker, versão/erros/fila dos coletores. Atualize e reinicie os coletores com o código da mesma versão para enviarem diagnóstico. Mais de 1.000 lotes ou erro informado gera um alerta; a verificação individual atrasada é detectada quando o coletor ainda está conectado. Os dados locais somente chegam quando a comunicação retorna.
+
+Configure o monitor externo para `https://dominio/health/monitoring/` para detectar worker sem contato por cinco minutos ou erro registrado. `/health/` continua sendo a verificação de web/banco usada no deploy: não depende do worker para evitar dependência circular. A própria central não consegue enviar pelo worker parado; o script externo precisa estar em outra máquina e com SMTP próprio.
+
+Papéis são criados pelo deploy ou por `python manage.py configure_roles`: Visualizador, Configurador (cadastro/alteração de equipamentos) e Operador de incidentes (reconhecimento, responsável e observações). Associe grupos pelo cadastro de usuários no Admin e associe a unidade em Site.members. Grupos não dão acesso a unidades automaticamente; superusuários têm administração global. Não atribua `is_staff` a operadores comuns sem necessidade de Admin. Os grupos Nexo são gerenciados pelo comando e suas permissões são reaplicadas no deploy.
+
+Arquivar retira o equipamento da coleta e do painel operacional, fecha seus incidentes e preserva amostras/auditoria. Restaurar exige novas amostras e reativa a coleta. Arquivamento não impede a política de retenção de apagar amostras antigas após 30 dias. Edite as quantidades de falhas e sucessos consecutivos para controlar confirmação de queda e recuperação. A prévia de alerta é explicativa e não executa testes reais nem envia mensagens.
+
+Auditoria de configuração registra antes/depois de campos de equipamentos, unidades, coletores e destinatários pelas telas e campos escalares pelo Admin. Segredos de autenticação do coletor/gateway não são registrados. Eventos antigos permanecem sem detalhe de campos. Alterações diretas no banco ou scripts externos não são capturadas.

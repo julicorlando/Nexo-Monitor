@@ -37,3 +37,6 @@ O inventário usa HTML/CSS com Django; React/Redis não são necessários nesta 
 
 ## Primeira configuração e pendências
 Após o primeiro login de administrador sem unidades, o painel abre `/setup/`. O guia também está no menu. Etapas mostram evidência de cadastro/coleta/envio; não certificam homologação ou leitura de mensagens. Veja a lista completa em [Pendências](docs/PENDENCIAS.md).
+
+## Operação e diagnóstico
+Painel `/operations/`, prévia das regras de cada equipamento, arquivamento/restauração e incidentes com reconhecimento/responsável/observações. Recuperação pode exigir sucessos consecutivos. Papéis são criados no deploy, com associação de usuários/grupos e unidades feita pelo administrador. `/health/monitoring/` permite ao monitor externo identificar worker parado. Coletores atualizados enviam versão, última sincronização, erro e tamanho da fila. O histórico de configuração registra campos antes/depois para alterações pelas telas. Veja detalhes em Operação.

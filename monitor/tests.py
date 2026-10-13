@@ -331,3 +331,73 @@ class MonitoringTests(TestCase):
         self.assertContains(response,"a leitura deve ser conferida")
     def test_setup_requires_login(self):
         self.assertEqual(self.client.get("/setup/").status_code,302)
+
+    def test_recovery_requires_consecutive_successes(self):
+        self.device.recovery_threshold=2;self.device.save()
+        self.send([{"id":self.device.pk,"success":False}])
+        self.send([{"id":self.device.pk,"success":True}])
+        self.assertTrue(Incident.objects.filter(resolved_at__isnull=True).exists())
+        self.send([{"id":self.device.pk,"success":True}])
+        self.assertFalse(Incident.objects.filter(resolved_at__isnull=True).exists())
+    def test_diagnostics_validated_and_received(self):
+        payload={"results":[],"diagnostics":{"version":"0.4.0","queue_batches":10,"queue_bytes":2048,"last_error":""}}
+        response=self.client.post("/api/collector/results/",json.dumps(payload),content_type="application/json",HTTP_AUTHORIZATION="Bearer secret")
+        self.assertEqual(response.status_code,200)
+        self.collector.refresh_from_db();self.assertEqual(self.collector.diagnostics["queue_batches"],10)
+        payload["diagnostics"]["queue_batches"]=-1
+        self.assertEqual(self.client.post("/api/collector/results/",json.dumps(payload),content_type="application/json",HTTP_AUTHORIZATION="Bearer secret").status_code,400)
+    def test_archive_keeps_history_and_omits_config(self):
+        from django.contrib.auth.models import User
+        root=User.objects.create_superuser(username="archive-admin",password="test")
+        self.send([{"id":self.device.pk,"success":True}]);self.client.force_login(root)
+        self.assertEqual(self.client.post(f"/devices/{self.device.pk}/archive/").status_code,302)
+        self.assertEqual(CheckResult.objects.count(),1)
+        config=self.client.get("/api/collector/config/",HTTP_AUTHORIZATION="Bearer secret").json()
+        self.assertEqual(config["devices"],[])
+        self.client.post(f"/devices/{self.device.pk}/archive/",{"restore":"yes"})
+        self.device.refresh_from_db();self.assertIsNone(self.device.archived_at);self.assertEqual(self.device.current_status,"unknown")
+    def test_worker_health_is_independent(self):
+        from .models import WorkerState
+        self.assertEqual(self.client.get("/health/monitoring/").status_code,503)
+        state=WorkerState.objects.create(name="main")
+        self.assertEqual(self.client.get("/health/monitoring/").status_code,200)
+        state.last_seen=timezone.now()-timedelta(minutes=6);state.save()
+        self.assertEqual(self.client.get("/health/monitoring/").status_code,503)
+    def test_missing_results_alerts_once_with_live_collector(self):
+        from .services import inspect_collectors
+        from .models import Notification
+        self.collector.last_seen=timezone.now();self.collector.save()
+        self.device.last_seen=timezone.now()-timedelta(minutes=10);self.device.save()
+        inspect_collectors();inspect_collectors()
+        self.assertEqual(Notification.objects.filter(event_kind="monitoring").count(),1)
+    def test_preview_does_not_mutate_or_send(self):
+        from django.contrib.auth.models import User
+        user=User.objects.create_user(username="preview-user",password="test")
+        self.collector.site.members.add(user);self.client.force_login(user)
+        self.assertEqual(self.client.get(f"/devices/{self.device.pk}/alert-preview/").status_code,200)
+        self.assertEqual(Incident.objects.count(),0)
+    def test_changes_are_field_level(self):
+        from django.contrib.auth.models import User
+        from .operations import config_snapshot,record_change
+        from .models import AuditEvent
+        user=User.objects.create_user(username="audit-user")
+        before=config_snapshot(self.device)
+        self.device.host="10.0.0.99";self.device.save()
+        record_change(user,self.device,before,"device.update",self.collector.site)
+        self.assertEqual(AuditEvent.objects.get().changes["host"],{"before":"192.168.1.2","after":"10.0.0.99"})
+    def test_incident_roles_and_unit_isolation(self):
+        from django.contrib.auth.models import User,Group
+        from django.core.management import call_command
+        call_command("configure_roles")
+        user=User.objects.create_user(username="incident-user",password="test")
+        self.collector.site.members.add(user)
+        self.send([{"id":self.device.pk,"success":False}])
+        incident=Incident.objects.get();self.client.force_login(user)
+        url=f"/incidents/{incident.pk}/"
+        self.assertEqual(self.client.post(url,{"action":"acknowledge"}).status_code,403)
+        user.groups.add(Group.objects.get(name="Nexo — Operador de incidentes"))
+        self.assertEqual(self.client.post(url,{"action":"acknowledge"}).status_code,200)
+        self.assertEqual(self.client.post(url,{"action":"note","body":"Verificando energia"}).status_code,200)
+        self.assertEqual(incident.incidentnote_set.count(),1)
+        outsider=User.objects.create_user(username="other-unit")
+        self.assertEqual(self.client.post(url,{"action":"assign","assigned_to":outsider.pk}).status_code,404)

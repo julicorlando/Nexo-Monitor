@@ -45,7 +45,7 @@ def deliver(item_id):
         config.full_clean()
         item=Notification.objects.select_for_update().get(pk=item_id)
         now=timezone.now()
-        kinds=["offline","collector_offline","test"]
+        kinds=["offline","collector_offline","monitoring","test"]
         if config.include_recovery:kinds+=["recovery","collector_recovery"]
         if item.event_kind not in kinds or item.created_at<config.activated_at or item.whatsapp_sent_at or item.whatsapp_attempts>=6:return False
         if item.whatsapp_next_attempt and item.whatsapp_next_attempt>now:return False
@@ -81,8 +81,10 @@ def dispatch():
     if not config:return
     # Limit old queued notifications; do not burst-send historic incidents when enabling.
     from django.db.models import Q
-    kinds=["offline","collector_offline","test"]
+    kinds=["offline","collector_offline","monitoring","test"]
     if config.include_recovery:kinds.extend(["recovery","collector_recovery"])
     pending=Notification.objects.filter(created_at__gte=config.activated_at,whatsapp_sent_at__isnull=True,whatsapp_attempts__lt=6,event_kind__in=kinds).filter(Q(whatsapp_next_attempt__isnull=True)|Q(whatsapp_next_attempt__lte=timezone.now())).exclude(whatsapp_last_error__in=["recipient_changed","event_resolved"])
     for identifier in pending.order_by("id").values_list("id",flat=True)[:100]:
+        from .operations import touch_worker
+        touch_worker()
         deliver(identifier)
