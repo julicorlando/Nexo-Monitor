@@ -6,6 +6,8 @@ from django.utils import timezone
 class Site(models.Model):
     name = models.CharField(max_length=120)
     members = models.ManyToManyField(User, blank=True)
+    latitude = models.FloatField(null=True,blank=True,validators=[MinValueValidator(-90),MaxValueValidator(90)])
+    longitude = models.FloatField(null=True,blank=True,validators=[MinValueValidator(-180),MaxValueValidator(180)])
     address = models.CharField(max_length=250, blank=True)
     def __str__(self): return self.name
 def lambda_token_hash():
@@ -83,6 +85,15 @@ class Incident(models.Model):
 
 class Notification(models.Model):
     site = models.ForeignKey(Site, on_delete=models.CASCADE)
+    device = models.ForeignKey(Device,null=True,blank=True,on_delete=models.SET_NULL)
+    collector = models.ForeignKey(Collector,null=True,blank=True,on_delete=models.SET_NULL)
+    event_kind = models.CharField(max_length=30,default="offline")
+    whatsapp_sent_at = models.DateTimeField(null=True,blank=True)
+    whatsapp_attempts = models.PositiveIntegerField(default=0)
+    whatsapp_next_attempt = models.DateTimeField(null=True,blank=True)
+    whatsapp_last_error = models.CharField(max_length=120,blank=True)
+    whatsapp_recipient = models.CharField(max_length=15,blank=True)
+    whatsapp_provider_id = models.CharField(max_length=200,blank=True)
     subject = models.CharField(max_length=200)
     body = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
@@ -115,3 +126,20 @@ class LoginThrottle(models.Model):
     key = models.CharField(max_length=64,primary_key=True)
     failures = models.PositiveIntegerField(default=0)
     started_at = models.DateTimeField(default=timezone.now)
+
+class WhatsAppSettings(models.Model):
+    # Single global recipient. No per-request destination is accepted by the sender.
+    id = models.PositiveSmallIntegerField(primary_key=True,default=1,editable=False)
+    recipient = models.CharField(max_length=15,blank=True)
+    enabled = models.BooleanField(default=False)
+    include_recovery = models.BooleanField(default=False)
+    activated_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+    def clean(self):
+        from django.core.exceptions import ValidationError
+        import re
+        if self.pk!=1:raise ValidationError("Somente uma configuração de WhatsApp é permitida.")
+        if self.recipient and not re.fullmatch(r"[1-9][0-9]{10,14}",self.recipient):raise ValidationError("Use país, DDD e número; somente dígitos.")
+        if self.enabled and not self.recipient:raise ValidationError("Cadastre o destinatário antes de ativar.")
+    class Meta:
+        constraints=[models.CheckConstraint(condition=models.Q(id=1),name="singleton_whatsapp")]

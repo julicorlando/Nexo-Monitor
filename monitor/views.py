@@ -182,3 +182,102 @@ def security(request):
             else:message="Código inválido."
     secret=request.session.get("pending_mfa","") if not profile else ""
     return render(request,"security.html",{"enabled":bool(profile),"secret":secret,"message":message})
+
+@login_required
+def whatsapp_settings(request):
+    from .models import WhatsAppSettings,AuditEvent
+    from .forms import WhatsAppForm
+    from .whatsapp import gateway,start_session,session_status,GatewayError
+    if not request.user.is_superuser:return JsonResponse({"error":"Forbidden"},status=403)
+    config,_=WhatsAppSettings.objects.get_or_create(pk=1)
+    message="";state="UNKNOWN"
+    form=WhatsAppForm(instance=config)
+    if request.method=="POST":
+        action=request.POST.get("action","save")
+        try:
+            if action=="save":
+                form=WhatsAppForm(request.POST,instance=config)
+                if form.is_valid():
+                    with transaction.atomic():
+                        locked=WhatsAppSettings.objects.select_for_update().get(pk=1)
+                        changed=locked.recipient!=form.cleaned_data["recipient"] or (not locked.enabled and form.cleaned_data["enabled"])
+                        locked.recipient=form.cleaned_data["recipient"];locked.enabled=form.cleaned_data["enabled"];locked.include_recovery=form.cleaned_data["include_recovery"]
+                        if changed:locked.activated_at=timezone.now()
+                        locked.full_clean();locked.save()
+                        AuditEvent.objects.create(actor=request.user,action="whatsapp.configure",object_label="Global recipient ***"+locked.recipient[-4:])
+                    message="Configuração salva. Os envios usam somente este número."
+            elif action=="test":
+                config=WhatsAppSettings.objects.get(pk=1)
+                site=Site.objects.order_by("id").first()
+                if not config.enabled or not config.recipient:message="Ative o canal e salve o destinatário antes do teste."
+                elif not site:message="Cadastre uma unidade antes do teste."
+                elif Notification.objects.filter(event_kind="test",created_at__gte=timezone.now()-timedelta(minutes=1)).exists():message="Teste já agendado. Aguarde um minuto."
+                else:
+                    Notification.objects.create(site=site,event_kind="test",subject="Teste de alerta",body="O canal de alertas está configurado para este número.")
+                    AuditEvent.objects.create(actor=request.user,action="whatsapp.test",object_label="registered recipient")
+                    message="Teste agendado somente para o destinatário cadastrado."
+            elif action=="retry":
+                config=WhatsAppSettings.objects.get(pk=1)
+                item=Notification.objects.filter(pk=int(request.POST.get("notification_id")) if request.POST.get("notification_id","").isdigit() else 0,whatsapp_sent_at__isnull=True,created_at__gte=config.activated_at,whatsapp_recipient=config.recipient).first()
+                if item and config.enabled:
+                    item.whatsapp_attempts=0;item.whatsapp_next_attempt=None;item.whatsapp_last_error="";item.save(update_fields=["whatsapp_attempts","whatsapp_next_attempt","whatsapp_last_error"])
+                    AuditEvent.objects.create(actor=request.user,action="whatsapp.retry",object_label=str(item.pk))
+                    message="Nova tentativa agendada para o mesmo número."
+                else:message="Evento não elegível para nova tentativa."
+            elif action=="connect":
+                start_session();message="Conexão iniciada. Aguarde o QR code."
+                AuditEvent.objects.create(actor=request.user,action="whatsapp.connect",object_label="default")
+            elif action=="stop":
+                gateway("/api/sessions/default/stop","POST",{});message="Sessão pausada."
+                AuditEvent.objects.create(actor=request.user,action="whatsapp.stop",object_label="default")
+        except GatewayError as exc:message="Não foi possível acessar o WhatsApp: "+str(exc)
+    try:state=session_status()
+    except GatewayError as exc:state=str(exc)
+    logs=Notification.objects.exclude(whatsapp_attempts=0).order_by("-id")[:30]
+    response=render(request,"whatsapp.html",{"form":form,"message":message,"state":state,"logs":logs})
+    response["Cache-Control"]="no-store"
+    return response
+@login_required
+@require_GET
+def whatsapp_qr(request):
+    from django.http import HttpResponse
+    from .whatsapp import gateway,GatewayError
+    if not request.user.is_superuser:return JsonResponse({"error":"Forbidden"},status=403)
+    try:data=gateway("/api/default/auth/qr",image=True)
+    except GatewayError:return JsonResponse({"error":"QR indisponível. Inicie a conexão ou aguarde nova tentativa."},status=503)
+    response=HttpResponse(data,content_type="image/png");response["Cache-Control"]="no-store";return response
+@login_required
+@require_GET
+def whatsapp_status(request):
+    from .whatsapp import session_status,GatewayError
+    if not request.user.is_superuser:return JsonResponse({"error":"Forbidden"},status=403)
+    try:state=session_status()
+    except GatewayError as exc:state=str(exc)
+    response=JsonResponse({"state":state});response["Cache-Control"]="no-store";return response
+
+@login_required
+def infrastructure_edit(request,kind,object_id=None):
+    from .forms import SiteForm,CollectorForm,EmailRecipientForm
+    from .models import AlertRecipient,AuditEvent
+    if not request.user.is_superuser:return JsonResponse({"error":"Forbidden"},status=403)
+    models={"site":(Site,SiteForm),"collector":(Collector,CollectorForm),"email":(AlertRecipient,EmailRecipientForm)}
+    if kind not in models:return JsonResponse({"error":"Not found"},status=404)
+    model,form_class=models[kind]
+    instance=get_object_or_404(model,pk=object_id) if object_id else None
+    form=form_class(request.POST or None,instance=instance)
+    token=None;message=""
+    if request.method=="POST" and form.is_valid():
+        with transaction.atomic():
+            obj=form.save()
+            if kind=="collector" and (not instance or request.POST.get("rotate_token")=="yes"):token=obj.issue_token()
+            site=obj if kind=="site" else obj.site
+            AuditEvent.objects.create(actor=request.user,site=site,action=kind+".update" if instance else kind+".create",object_label=str(obj.pk))
+            if token:AuditEvent.objects.create(actor=request.user,site=site,action="collector.token.rotate",object_label=str(obj.pk))
+        message="Configuração salva."
+    response=render(request,"infrastructure_form.html",{"form":form,"kind":kind,"token":token,"message":message})
+    response["Cache-Control"]="no-store";return response
+@login_required
+def notifications(request):
+    from .models import AlertRecipient
+    sites=Site.objects.all() if request.user.is_superuser else Site.objects.filter(members=request.user)
+    return render(request,"notifications.html",{"events":Notification.objects.filter(site__in=sites).order_by("-id")[:200],"recipients":AlertRecipient.objects.filter(site__in=sites)})

@@ -10,6 +10,8 @@ while True:
         from monitor.services import inspect_collectors
         inspect_collectors()
         call_command("send_notifications")
+        from monitor.whatsapp import dispatch
+        dispatch()
         if time.monotonic()-last_cleanup>86400:
             call_command("prune_results")
             last_cleanup=time.monotonic()

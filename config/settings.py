@@ -33,3 +33,6 @@ EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
 EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").lower()=="true"
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "monitor@example.com")
 EMAIL_TIMEOUT = 15
+
+WAHA_URL = os.getenv("WAHA_URL","http://waha:3000")
+WAHA_API_KEY = os.getenv("WAHA_API_KEY","")

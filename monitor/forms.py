@@ -36,3 +36,32 @@ class DeviceForm(forms.ModelForm):
             if node.pk==self.instance.pk or node.pk in seen:raise forms.ValidationError("Dependência circular não permitida.")
             seen.add(node.pk);node=node.parent
         return cleaned
+
+class WhatsAppForm(forms.ModelForm):
+    recipient=forms.CharField(label="Único número autorizado (país + DDD + número)",required=False,max_length=40)
+    class Meta:
+        from .models import WhatsAppSettings
+        model=WhatsAppSettings
+        fields=["recipient","enabled","include_recovery"]
+        labels={"recipient":"Único número autorizado (país + DDD + número)","enabled":"Ativar alertas de WhatsApp","include_recovery":"Avisar também quando recuperar"}
+    def clean_recipient(self):
+        import re
+        value=re.sub(r"[\s()+-]","",self.cleaned_data["recipient"])
+        if value and not re.fullmatch(r"[1-9][0-9]{10,14}",value):raise forms.ValidationError("Use país, DDD e número. Não são permitidos grupos ou listas.")
+        return value
+
+class SiteForm(forms.ModelForm):
+    class Meta:
+        from .models import Site
+        model=Site
+        fields=["name","address","latitude","longitude","members"]
+class CollectorForm(forms.ModelForm):
+    class Meta:
+        from .models import Collector
+        model=Collector
+        fields=["name","site","enabled","offline_after"]
+class EmailRecipientForm(forms.ModelForm):
+    class Meta:
+        from .models import AlertRecipient
+        model=AlertRecipient
+        fields=["site","email","enabled"]

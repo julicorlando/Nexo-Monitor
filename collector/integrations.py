@@ -40,11 +40,21 @@ def read(device):
         # Endpoint is explicitly configured for the installed controller/API version.
         path=device.get("integration_path")
         if not path:raise ValueError("Configure UniFi read-only API endpoint")
-        data=json.loads(fetch(device,path,api_key=True))
-        devices=data.get("data")
-        if not isinstance(devices,list):raise ValueError("Unsupported UniFi response")
+        from urllib.parse import urlsplit,parse_qsl,urlencode,urlunsplit
+        parsed=urlsplit(path);params=dict(parse_qsl(parsed.query));params.pop("offset",None);params.pop("limit",None)
+        devices=[];offset=0;complete=False
+        for _ in range(10):
+            params.update({"offset":str(offset),"limit":"50"})
+            target=urlunsplit(("","",parsed.path,urlencode(params),""))
+            data=json.loads(fetch(device,target,api_key=True))
+            page=data.get("data")
+            if not isinstance(page,list) or any(not isinstance(i,dict) for i in page):raise ValueError("Unsupported UniFi response")
+            devices.extend(page);offset+=len(page)
+            total=data.get("totalCount")
+            if not page or (type(total) is int and offset>=total) or (total is None and len(page)<50):complete=True;break
         states=[{"name":str(i.get("name",""))[:100],"id":str(i.get("id",""))[:100],"state":str(i.get("state","UNKNOWN"))[:50],"ip":str(i.get("ipAddress",""))[:100]} for i in devices[:50]]
-        return {"integration":{"devices":states,"count":len(devices),"scope":"API page only"}},all(i["state"]=="ONLINE" for i in states) and bool(states)
+        healthy=complete and bool(devices) and all(i.get("state")=="ONLINE" for i in devices)
+        return {"integration":{"devices":states,"count":len(devices),"displayed":len(states),"complete":complete}},healthy
     if kind=="hikvision":
         path=device.get("integration_path") or "/ISAPI/ContentMgmt/Storage"
         root=ElementTree.fromstring(fetch(device,path,digest=True))

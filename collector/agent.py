@@ -58,9 +58,21 @@ def check(device):
             if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.:%_-]*",host) or not re.fullmatch(r"[0-9.]+",oid): raise ValueError("Invalid SNMP target")
             key=device.get("credential_key","")
             if not re.fullmatch(r"[A-Za-z0-9_-]+",key): raise ValueError("Missing SNMP credential key")
-            community=os.environ["NEXO_SNMP_"+key.upper().replace("-","_")]
-            result=subprocess.run(["snmpwalk" if kind=="snmpwalk" else "snmpget","-v2c","-c",community,"-t","2","-r","0","-Oqv",host,oid],capture_output=True,text=True,timeout=5,check=True)
-            metrics={"integration":{"oid":oid,"values":result.stdout.strip().splitlines()[:50]}} if kind=="snmpwalk" else {"snmp_value":result.stdout.strip()[:500]}
+            config_key="NEXO_SNMP_"+key.upper().replace("-","_")
+            config_dir=os.getenv(config_key+"_CONFIG")
+            env=os.environ.copy()
+            if config_dir:
+                from pathlib import Path
+                config=Path(config_dir)/"snmp.conf"
+                if not config.is_file():raise ValueError("SNMPv3 config not found")
+                if platform.system()!="Windows" and config.stat().st_mode & 0o077:raise ValueError("SNMP config must be private")
+                env["SNMPCONFPATH"]=config_dir
+                auth_args=["-v3","-l","authPriv"]
+            else:
+                community=os.environ[config_key]
+                auth_args=["-v2c","-c",community]
+            result=subprocess.run(["snmpwalk" if kind=="snmpwalk" else "snmpget",*auth_args,"-t","2","-r","0","-Oqv",host,oid],env=env,capture_output=True,text=True,timeout=5,check=True)
+            metrics={"integration":{"oid":oid,"values":[line[:250] for line in result.stdout.strip().splitlines()[:50]]}} if kind=="snmpwalk" else {"snmp_value":result.stdout.strip()[:500]}
         else: raise ValueError("Unsupported check")
         return {"id":device["id"],"success":True,"latency_ms":round((time.monotonic()-start)*1000,2),"metrics":metrics}
     except Exception:

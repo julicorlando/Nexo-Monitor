@@ -185,3 +185,125 @@ class MonitoringTests(TestCase):
         self.client.force_login(user)
         for url in ["/inventory/","/devices/new/","/units/","/audit/","/security/",f"/devices/{self.device.pk}/history/"]:
             self.assertEqual(self.client.get(url).status_code,200,url)
+
+    def test_whatsapp_single_destination_and_no_repeat(self):
+        from .models import WhatsAppSettings,Notification
+        from .whatsapp import deliver
+        from unittest.mock import patch
+        config=WhatsAppSettings.objects.create(recipient="5581999991234",enabled=True)
+        item=Notification.objects.create(site=self.collector.site,subject="Falha",body="Dispositivo offline")
+        with patch("monitor.whatsapp.session_status",return_value="WORKING"),patch("monitor.whatsapp.gateway",return_value={"id":"message-1"}) as send:
+            self.assertTrue(deliver(item.pk));self.assertFalse(deliver(item.pk))
+        send.assert_called_once()
+        self.assertEqual(send.call_args.args[2]["chatId"],"5581999991234@c.us")
+        item.refresh_from_db();self.assertEqual(item.whatsapp_recipient,config.recipient)
+    def test_whatsapp_rejects_groups_and_multiple_numbers(self):
+        from .forms import WhatsAppForm
+        for number in ["123456@g.us","5581999991234,5581999995678","5581999991234@c.us"]:
+            form=WhatsAppForm({"recipient":number,"enabled":True})
+            self.assertFalse(form.is_valid())
+        form=WhatsAppForm({"recipient":"+55 (81) 99999-1234","enabled":True})
+        self.assertTrue(form.is_valid(),form.errors)
+    def test_whatsapp_recovery_opt_in_and_history_cutoff(self):
+        from .models import WhatsAppSettings,Notification
+        from .whatsapp import deliver
+        from unittest.mock import patch
+        old=Notification.objects.create(site=self.collector.site,subject="Old",body="")
+        WhatsAppSettings.objects.create(recipient="5581999991234",enabled=True)
+        recovery=Notification.objects.create(site=self.collector.site,event_kind="recovery",subject="Recuperado",body="")
+        with patch("monitor.whatsapp.gateway") as send:
+            self.assertFalse(deliver(old.pk));self.assertFalse(deliver(recovery.pk));send.assert_not_called()
+    def test_whatsapp_retry_and_destination_change(self):
+        from .models import WhatsAppSettings,Notification
+        from .whatsapp import deliver,GatewayError
+        from unittest.mock import patch
+        config=WhatsAppSettings.objects.create(recipient="5581999991234",enabled=True)
+        item=Notification.objects.create(site=self.collector.site,subject="Offline",body="")
+        with patch("monitor.whatsapp.session_status",return_value="WORKING"),patch("monitor.whatsapp.gateway",side_effect=GatewayError("gateway_unavailable")):
+            self.assertFalse(deliver(item.pk))
+        item.refresh_from_db();self.assertEqual(item.whatsapp_attempts,1)
+        self.assertIsNotNone(item.whatsapp_next_attempt)
+        config.recipient="5581999995678";config.save()
+        item.whatsapp_next_attempt=None;item.save()
+        with patch("monitor.whatsapp.gateway") as send:
+            self.assertFalse(deliver(item.pk));send.assert_not_called()
+        item.refresh_from_db();self.assertEqual(item.whatsapp_last_error,"recipient_changed")
+    def test_whatsapp_routes_admin_only_and_post_csrf(self):
+        from django.contrib.auth.models import User
+        from django.test import Client
+        from unittest.mock import patch
+        user=User.objects.create_user(username="whatsapp-viewer",password="test")
+        self.client.force_login(user)
+        for url in ["/whatsapp/","/whatsapp/qr/","/whatsapp/status/"]:self.assertEqual(self.client.get(url).status_code,403)
+        root=User.objects.create_superuser(username="whatsapp-admin",password="test")
+        client=Client(enforce_csrf_checks=True);client.force_login(root)
+        self.assertEqual(client.post("/whatsapp/",{"action":"connect"}).status_code,403)
+        self.client.force_login(root)
+        with patch("monitor.whatsapp.session_status",return_value="STOPPED"):
+            self.assertEqual(self.client.get("/whatsapp/").status_code,200)
+    def test_whatsapp_qr_is_private_and_not_cached(self):
+        from django.contrib.auth.models import User
+        from unittest.mock import patch
+        root=User.objects.create_superuser(username="qr-admin",password="test")
+        self.client.force_login(root)
+        with patch("monitor.whatsapp.gateway",return_value=b"PNG"):
+            response=self.client.get("/whatsapp/qr/")
+        self.assertEqual(response["Cache-Control"],"no-store")
+        self.assertEqual(response["Content-Type"],"image/png")
+    def test_unifi_pagination_considers_all_devices(self):
+        import importlib.util
+        from pathlib import Path
+        from unittest.mock import patch
+        spec=importlib.util.spec_from_file_location("integration_paged",Path(__file__).resolve().parent.parent/"collector/integrations.py")
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        pages=[json.dumps({"data":[{"id":"1","state":"ONLINE"}],"totalCount":2}).encode(),json.dumps({"data":[{"id":"2","state":"OFFLINE"}],"totalCount":2}).encode()]
+        with patch.object(module,"fetch",side_effect=pages) as fetch:metrics,healthy=module.read({"check_type":"unifi","integration_path":"/integration/v1/sites/x/devices"})
+        self.assertFalse(healthy);self.assertEqual(metrics["integration"]["count"],2)
+        self.assertIn("offset=1",fetch.call_args.args[1])
+    def test_snmpv3_uses_private_file_not_command_password(self):
+        import importlib.util,tempfile
+        from pathlib import Path
+        from unittest.mock import patch,MagicMock
+        spec=importlib.util.spec_from_file_location("agent_v3",Path(__file__).resolve().parent.parent/"collector/agent.py")
+        agent=importlib.util.module_from_spec(spec);spec.loader.exec_module(agent)
+        with tempfile.TemporaryDirectory() as folder:
+            config=Path(folder)/"snmp.conf";config.write_text("defSecurityName test\ndefAuthPassphrase secret\n");config.chmod(0o600)
+            with patch.dict(agent.os.environ,{"NEXO_SNMP_SWITCH_CONFIG":folder}),patch.object(agent.subprocess,"run",return_value=MagicMock(stdout="123")) as run:
+                result=agent.check({"id":1,"check_type":"snmp","host":"localhost","snmp_oid":"1.3.6.1","credential_key":"switch"})
+            self.assertTrue(result["success"]);self.assertIn("-v3",run.call_args.args[0]);self.assertNotIn("secret",run.call_args.args[0])
+
+    def test_stale_whatsapp_offline_event_is_not_sent(self):
+        from .models import WhatsAppSettings,Notification
+        from .whatsapp import deliver
+        from unittest.mock import patch
+        WhatsAppSettings.objects.create(recipient="5581999991234",enabled=True)
+        item=Notification.objects.create(site=self.collector.site,device=self.device,subject="Offline",body="")
+        self.device.status="up";self.device.save()
+        with patch("monitor.whatsapp.gateway") as send:
+            self.assertFalse(deliver(item.pk));send.assert_not_called()
+        item.refresh_from_db();self.assertEqual(item.whatsapp_last_error,"event_resolved")
+    def test_infrastructure_setup_and_tokens(self):
+        from django.contrib.auth.models import User
+        root=User.objects.create_superuser(username="setup-admin",password="test")
+        self.client.force_login(root)
+        response=self.client.post("/infrastructure/collector/new/",{"name":"New","site":self.collector.site.pk,"enabled":"on","offline_after":"180"})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response["Cache-Control"],"no-store")
+        self.assertContains(response,"Token do coletor")
+        self.assertTrue(Collector.objects.filter(name="New").exists())
+    def test_whatsapp_test_action_ignores_destination_input(self):
+        from django.contrib.auth.models import User
+        from .models import WhatsAppSettings,Notification
+        from unittest.mock import patch
+        root=User.objects.create_superuser(username="test-wa-admin",password="test")
+        self.client.force_login(root)
+        WhatsAppSettings.objects.create(recipient="5581999991234",enabled=True)
+        with patch("monitor.whatsapp.session_status",return_value="WORKING"):
+            response=self.client.post("/whatsapp/",{"action":"test","recipient":"5581999995678","chatId":"arbitrary@g.us","text":"arbitrary"})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(WhatsAppSettings.objects.get().recipient,"5581999991234")
+        self.assertEqual(Notification.objects.get(event_kind="test").body,"O canal de alertas está configurado para este número.")
+    def test_whatsapp_settings_singleton_database_constraint(self):
+        from .models import WhatsAppSettings
+        from django.db import IntegrityError,transaction
+        with self.assertRaises(IntegrityError),transaction.atomic():WhatsAppSettings.objects.create(pk=2)

@@ -1,7 +1,7 @@
 # Instalação e operação
 
 ## Coolify
-Use a branch main e compose.yaml. Configure as variáveis de .env.example, domínio HTTPS no serviço web/8000 e disco persistente do PostgreSQL. Não associe domínio ao worker ou banco. O worker precisa de uma réplica apenas. Crie o superusuário pelo terminal do serviço web. Migrations rodam antes do Gunicorn; worker espera healthcheck web.
+Use a branch main e compose.yaml (ou compose.whatsapp.yaml para incluir WhatsApp/QR). Configure as variáveis de .env.example, domínio HTTPS no serviço web/8000 e disco persistente do PostgreSQL. Não associe domínio ao worker ou banco. O worker precisa de uma réplica apenas. Crie o superusuário pelo terminal do serviço web. Cadastre unidades/coletores e e-mails pelas telas Unidades e Alertas. Ao criar coletor ou rotacionar seu token, copie o valor exibido uma única vez. Migrations rodam antes do Gunicorn; worker espera healthcheck web.
 
 ## Coletores
 Para métricas do host, execute Python nativamente. Linux precisa de ping/net-snmp, Windows precisa de Python e psutil; SNMP exige instalação de net-snmp compatível. Configure NEXO_URL, NEXO_TOKEN e opcionalmente NEXO_SPOOL_PATH. Execute `python collector/agent.py` como serviço com reinício. Um único processo por arquivo SQLite. O diretório da fila precisa ser gravável e persistente. No Docker use collector/compose.yaml. Configure as variáveis de integração no serviço do coletor: não as envie ao painel.

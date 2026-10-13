@@ -13,11 +13,11 @@ def reconcile_devices(collector, now):
         if device.status=="up" or not device.enabled or suppressed:
             changed=opened.update(resolved_at=now)
             if changed and not suppressed:
-                Notification.objects.create(site=collector.site,subject="Recuperado: "+device.name,body="Equipamento voltou a responder.")
+                Notification.objects.create(site=collector.site,device=device,event_kind="recovery",subject="Recuperado: "+device.name,body="Equipamento voltou a responder.")
         elif device.status=="down":
             incident,created=Incident.objects.get_or_create(device=device,resolved_at__isnull=True)
             if created:
-                Notification.objects.create(site=collector.site,subject="Falha: "+device.name,body="Falha em "+device.check_type+". Unidade: "+str(collector.site))
+                Notification.objects.create(site=collector.site,device=device,event_kind="offline",subject="Falha: "+device.name,body="Equipamento: "+device.name+" • Endereço: "+device.host+":"+str(device.port)+" • Verificação: "+device.check_type)
 
 def inspect_collectors():
     now=timezone.now()
@@ -29,5 +29,5 @@ def inspect_collectors():
             offline=(now-collector.last_seen).total_seconds()>collector.offline_after
             if offline!=collector.offline:
                 collector.offline=offline;collector.save(update_fields=["offline"])
-                Notification.objects.create(site=collector.site,subject=("Coletor desconectado: " if offline else "Coletor recuperado: ")+collector.name,body="Verifique o link da unidade e o serviço coletor.")
+                Notification.objects.create(site=collector.site,collector=collector,event_kind="collector_offline" if offline else "collector_recovery",subject=("Coletor desconectado: " if offline else "Coletor recuperado: ")+collector.name,body="Verifique o link da unidade e o serviço coletor.")
             if not offline: reconcile_devices(collector,now)
